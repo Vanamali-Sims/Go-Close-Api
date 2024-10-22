@@ -3,6 +3,7 @@ package search
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -28,27 +29,42 @@ type CloseRangeResult struct {
 	Candle             string  `json:"candle"`
 }
 
-func GetCloseUSD(assetClass, internalSymbol, date string) (CloseResult, error) {
-	baseCurrency := extractBaseCurrency(internalSymbol) // Extract base currency from symbol
-	requestedDate, err := time.Parse(time.RFC3339, date)
+// Corrected GetCloseUSD function
+func GetCloseUSD(assetClass, internalSymbol string, date time.Time) (CloseResult, error) {
+	// Path finding using the adjusted findDataPath function
+	csvFilePath, err := findDataPath(assetClass, internalSymbol, date)
 	if err != nil {
-		return CloseResult{}, errors.New("invalid date format")
+		return CloseResult{}, fmt.Errorf("failed to find CSV file path: %v", err)
+	}
+	fmt.Println("CSV data path:", csvFilePath) // Debugging output to verify path correctness
+
+	// Reading the CSV file using the found path
+	assetData, err := readCSV(csvFilePath)
+	if err != nil {
+		return CloseResult{}, fmt.Errorf("failed to read asset CSV: %v", err)
 	}
 
-	// Fetch conversion rate
-	conversionRate, conversionRateDate, err := getConversionRate(baseCurrency, requestedDate)
+	// Finding the closest matching date and retrieving the raw close price
+	rawClosePrice, closestDate, err := findClosestDate(assetData, date)
+	if err != nil {
+		return CloseResult{}, fmt.Errorf("error finding closest date: %v", err)
+	}
+
+	// Fetching the conversion rate using a dynamically constructed forex file path
+	forexFilePath := filepath.Join("data", "forex", "all", fmt.Sprintf("%s_%s.csv", extractBaseCurrency(internalSymbol), "USD"))
+	conversionRate, conversionRateDate, err := getConversionRate(forexFilePath, date)
 	if err != nil {
 		return CloseResult{}, fmt.Errorf("conversion rate error: %v", err)
 	}
 
-	// Here would be the logic to fetch the raw close price from CSV data (not shown here)
-	rawClosePrice := 0.522 // Example raw close price fetched from data
+	// Calculating the USD price
 	closePriceUSD := rawClosePrice * conversionRate
 
+	// Returning the result struct with all relevant data
 	return CloseResult{
 		ClosePriceUSD:      closePriceUSD,
 		RawClosePrice:      rawClosePrice,
-		FetchedDate:        requestedDate.Format(time.RFC3339),
+		FetchedDate:        closestDate.Format(time.RFC3339),
 		ConversionRate:     conversionRate,
 		ConversionRateDate: conversionRateDate.Format(time.RFC3339),
 		Candle:             "1d",
@@ -57,7 +73,6 @@ func GetCloseUSD(assetClass, internalSymbol, date string) (CloseResult, error) {
 
 // GetCloseInBetween fetches the closing prices between two dates for an asset.
 func GetCloseInBetween(assetClass, internalSymbol, startDate, endDate string) (CloseRangeResult, error) {
-	// Parse the requested dates
 	start, err := time.Parse(time.RFC3339, startDate)
 	if err != nil {
 		return CloseRangeResult{}, errors.New("invalid start date format")
@@ -68,13 +83,10 @@ func GetCloseInBetween(assetClass, internalSymbol, startDate, endDate string) (C
 		return CloseRangeResult{}, errors.New("invalid end date format")
 	}
 
-	// Define the CSV file paths for the asset class (crypto, stocks)
+	// Define the CSV file path
 	csvFilePath := filepath.Join("data", assetClass, internalSymbol+".csv")
 
-	// Forex file path to be used for conversion rates
-	forexFilePath := filepath.Join("data", "forex", "conversion_rates.csv")
-
-	// Read the CSV file for the asset (crypto/stocks)
+	// Read the CSV file for the asset
 	assetData, err := readCSV(csvFilePath)
 	if err != nil {
 		return CloseRangeResult{}, fmt.Errorf("failed to read asset CSV: %v", err)
@@ -92,7 +104,8 @@ func GetCloseInBetween(assetClass, internalSymbol, startDate, endDate string) (C
 	}
 
 	// Assuming the asset is priced in local currency, perform conversion to USD if necessary
-	conversionRate, conversionRateDate, err := getConversionRate(forexFilePath, start)
+	baseCurrency := extractBaseCurrency(internalSymbol)
+	conversionRate, conversionRateDate, err := getConversionRate(baseCurrency, start)
 	if err != nil {
 		return CloseRangeResult{}, fmt.Errorf("failed to retrieve conversion rate: %v", err)
 	}
@@ -150,32 +163,71 @@ func extractBaseCurrency(symbol string) string {
 	return "USD" // Default to USD if no currency part is found
 }
 
-// getConversionRate retrieves the conversion rate from a forex CSV file.
-func getConversionRate(baseCurrency string, date time.Time) (float64, time.Time, error) {
-	// Always targeting USD
-	targetCurrency := "USD"
+// func getConversionRate(forexFilePath string, date time.Time) (float64, time.Time, error) {
+// 	// If the base currency is USD, no need to fetch conversion rates as it is 1:1
+// 	if strings.Contains(forexFilePath, "USD_USD.csv") {
+// 		return 1.0, date, nil
+// 	}
 
-	// If the base currency is USD, skip file lookup and return 1.0 directly
-	if baseCurrency == "USD" || baseCurrency == "USDT" {
-		return 1.0, date, nil // No conversion needed, rate is 1:1, return the requested date as the rate date
+// 	// Load the CSV data from the forex file path
+// 	data, err := readCSV(forexFilePath)
+// 	if err != nil {
+// 		return 0, time.Time{}, fmt.Errorf("failed to open forex file: %v", err)
+// 	}
+
+// 	var closestDate time.Time
+// 	var conversionRate float64
+// 	smallestDiff := time.Duration(1<<63 - 1) // Initialize with a large value
+
+// 	// Iterate through the data to find the closest date and its conversion rate
+// 	for _, row := range data {
+// 		recordDate, err := time.Parse(time.RFC3339, row["Date"])
+// 		if err != nil {
+// 			continue // Skip rows with invalid date formats
+// 		}
+// 		diff := date.Sub(recordDate).Abs()
+// 		if diff < smallestDiff {
+// 			smallestDiff = diff
+// 			closestDate = recordDate
+// 			conversionRate, err = strconv.ParseFloat(row["ConversionRate"], 64)
+// 			if err != nil {
+// 				continue // Skip rows with invalid conversion rates
+// 			}
+// 		}
+// 	}
+
+// 	if smallestDiff == time.Duration(1<<63-1) {
+// 		return 0, time.Time{}, errors.New("no conversion rate found")
+// 	}
+
+// 	return conversionRate, closestDate, nil
+// }
+
+func getConversionRate(baseCurrency string, date time.Time) (float64, time.Time, error) {
+	if baseCurrency == "USD" {
+		return 1.0, date, nil // No conversion needed for USD to USD
 	}
 
-	// Construct the file path based on the currency pair
-	filePath := filepath.Join("data", "forex", fmt.Sprintf("%s_%s.csv", baseCurrency, targetCurrency))
+	forexFilePath, err := findForexPath(baseCurrency, date)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("failed to find forex file path: %v", err)
+	}
 
-	data, err := readCSV(filePath)
+	fmt.Println("Using forex data path:", forexFilePath)
+
+	data, err := readCSV(forexFilePath)
 	if err != nil {
 		return 0, time.Time{}, fmt.Errorf("failed to open forex file: %v", err)
 	}
 
 	var closestDate time.Time
 	var conversionRate float64
-	smallestDiff := time.Duration(1<<63 - 1) // Initialize with a large value
+	smallestDiff := time.Duration(1<<63 - 1)
 
 	for _, row := range data {
 		recordDate, err := time.Parse(time.RFC3339, row["Date"])
 		if err != nil {
-			continue // Skip rows with invalid date formats
+			continue
 		}
 		diff := date.Sub(recordDate).Abs()
 		if diff < smallestDiff {
@@ -183,7 +235,7 @@ func getConversionRate(baseCurrency string, date time.Time) (float64, time.Time,
 			closestDate = recordDate
 			conversionRate, err = strconv.ParseFloat(row["ConversionRate"], 64)
 			if err != nil {
-				continue // Skip rows with invalid conversion rates
+				continue
 			}
 		}
 	}
@@ -193,4 +245,70 @@ func getConversionRate(baseCurrency string, date time.Time) (float64, time.Time,
 	}
 
 	return conversionRate, closestDate, nil
+}
+
+func findDataPath(assetClass, internalSymbol string, date time.Time) (string, error) {
+	basePath := filepath.Join("C:\\Users\\isvan\\OneDrive\\Documents\\work\\GoApi\\data", assetClass)
+	year := date.Format("2006") // Ensure four-digit year
+	month := date.Format("01")
+	day := date.Format("02")
+
+	intervals := []string{"1m", "2m", "5m", "15m", "1h", "1w", "1d"}
+	for _, interval := range intervals {
+		path := filepath.Join(basePath, year, month, day, interval, fmt.Sprintf("%s.csv", internalSymbol))
+		fmt.Println("Checking path:", path)
+		if _, err := os.Stat(path); err == nil {
+			fmt.Println("Found file at:", path)
+			return path, nil
+		} else {
+			fmt.Println("Could not find file at:", path, "; Error:", err)
+		}
+	}
+
+	allPath := filepath.Join(basePath, year, "all", fmt.Sprintf("%s.csv", internalSymbol))
+	fmt.Println("Checking all directory path:", allPath)
+	if _, err := os.Stat(allPath); err == nil {
+		fmt.Println("Found file in all directory at:", allPath)
+		return allPath, nil
+	} else {
+		fmt.Println("Could not find file in all directory;", "Error:", err)
+	}
+
+	return "", fmt.Errorf("no valid data path found for the date: %s", date)
+}
+
+func findForexPath(baseCurrency string, date time.Time) (string, error) {
+	basePath := "C:\\Users\\isvan\\OneDrive\\Documents\\work\\GoApi\\data\\forex"
+	year := date.Format("2006")
+	month := date.Format("01")
+	day := date.Format("02")
+
+	// Target currency is always USD
+	targetCurrency := "USD"
+	fileName := fmt.Sprintf("%s_%s.csv", baseCurrency, targetCurrency)
+
+	// Intervals to check in order of priority
+	intervals := []string{"1m", "2m", "5m", "15m", "1h", "1w", "1d"}
+	for _, interval := range intervals {
+		path := filepath.Join(basePath, year, month, day, interval, fileName)
+		fmt.Println("Checking forex path:", path)
+		if _, err := os.Stat(path); err == nil {
+			fmt.Println("Found forex file at:", path)
+			return path, nil
+		} else {
+			fmt.Println("Could not find forex file at:", path, "; Error:", err)
+		}
+	}
+
+	// Fallback to the 'all' directory at the year level if no specific interval file is found
+	allPath := filepath.Join(basePath, year, "all", fileName)
+	fmt.Println("Checking forex all directory path:", allPath)
+	if _, err := os.Stat(allPath); err == nil {
+		fmt.Println("Found forex file in all directory at:", allPath)
+		return allPath, nil
+	} else {
+		fmt.Println("Could not find forex file in all directory;", "Error:", err)
+	}
+
+	return "", fmt.Errorf("no valid forex data path found for the date: %s", date)
 }

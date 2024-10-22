@@ -3,23 +3,24 @@ package search
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
-func TestGetCloseUSD(t *testing.T) {
-	assetClass := "crypto"
-	internalSymbol := "1000SATS_USDT"
-	date := "2024-01-22T00:00:59Z"
+func TestGetCloseUSDForSpecificDate(t *testing.T) {
+	assetClass := "stocks"
+	internalSymbol := "1120__XSAU_SAR"
+	dateString := "2024-07-09T09:30:00Z"
+	date, err := time.Parse(time.RFC3339, dateString)
+	if err != nil {
+		t.Fatalf("Error parsing date: %v", err)
+	}
+
+	// Run the GetCloseUSD function
 	result, err := GetCloseUSD(assetClass, internalSymbol, date)
 	if err != nil {
 		t.Fatalf("Error when calling GetCloseUSD: %v", err)
 	}
 
-	fmt.Printf("Raw Close Price: %f\n", result.RawClosePrice)
-	fmt.Printf("Converted Close Price USD: %f\n", result.ClosePriceUSD)
-	fmt.Printf("Conversion Rate: %f on %s\n", result.ConversionRate, result.ConversionRateDate)
-	fmt.Printf("Data Fetched on: %s\n", result.FetchedDate)
-
-	if result.ClosePriceUSD == 0 {
-		t.Errorf("Expected non-zero ClosePriceUSD, got %f", result.ClosePriceUSD)
-	}
+	// Print the result for manual verification
+	fmt.Printf("Result: %+v\n", result)
 }

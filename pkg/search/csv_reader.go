@@ -1,7 +1,9 @@
 package search
 
 import (
+	"bufio"
 	"encoding/csv"
+	"io"
 	"os"
 )
 
@@ -12,18 +14,31 @@ func readCSV(filePath string) ([]map[string]string, error) {
 	}
 	defer file.Close()
 
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	headers := records[0]
+	reader := csv.NewReader(bufio.NewReader(file))
 	var data []map[string]string
-	for _, record := range records[1:] {
+	var headers []string
+	firstLine := true
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err // Handle non-EOF errors
+		}
+
+		if firstLine {
+			headers = record
+			firstLine = false
+			continue
+		}
+
 		row := make(map[string]string)
 		for i, value := range record {
-			row[headers[i]] = value
+			if i < len(headers) { // Check to prevent index out of range errors
+				row[headers[i]] = value
+			}
 		}
 		data = append(data, row)
 	}
