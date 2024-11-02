@@ -1,11 +1,28 @@
-// search_integration_test.go
 package search
 
-// func TestGetDataPath(t *testing.T) {
-// 	basePath := filepath.Join(os.TempDir(), "testData")
-// 	os.MkdirAll(filepath.Join(basePath, "crypto", "2024", "07", "01", "15m"), 0755)
-// 	defer os.RemoveAll(basePath)
+// import (
+// 	"fmt"
+// 	"testing"
+// )
 
-// 	GetDataPath("crypto", "2024-07-01T12:00:00Z")
-// 	// Outputs to stdout; use a logger or similar to capture and verify output if needed for automated tests
+// // TestExtractBaseCurrency checks the functionality of extractBaseCurrency
+// func TestExtractBaseCurrency(t *testing.T) {
+// 	tests := []struct {
+// 		filename string
+// 		expected string
+// 	}{
+// 		{"LANCER__XNSE_INR.csv", "INR"},
+// 		{"ZZZ_USDT.csv", "USD"},
+// 		{"LAU__XASX_AUD.csv", "AUD"},
+// 		{"ZENI__1_USDT.csv", "USD"},
+// 		{"LGBBROSLTD__XBOM_INR.csv", "INR"},
+// 	}
+
+// 	for _, test := range tests {
+// 		got := extractBaseCurrency(test.filename)
+// 		fmt.Printf("Filename: %s, Extracted Currency: %s\n", test.filename, got)
+// 		if got != test.expected {
+// 			t.Errorf("extractBaseCurrency(%q) = %q; expected %q", test.filename, got, test.expected)
+// 		}
+// 	}
 // }

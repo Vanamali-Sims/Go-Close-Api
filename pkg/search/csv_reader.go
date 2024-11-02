@@ -3,8 +3,11 @@ package search
 import (
 	"bufio"
 	"encoding/csv"
+	"fmt"
 	"io"
 	"os"
+
+	"github.com/blevesearch/bleve"
 )
 
 func readCSV(filePath string) ([]map[string]string, error) {
@@ -43,4 +46,31 @@ func readCSV(filePath string) ([]map[string]string, error) {
 		data = append(data, row)
 	}
 	return data, nil
+}
+
+func queryIndex(index bleve.Index, queryString string) ([]map[string]string, error) {
+	// Construct a query for the Bleve search index. In this case, using a simple query syntax.
+	query := bleve.NewQueryStringQuery(queryString)
+
+	// Create a search request based on the query.
+	search := bleve.NewSearchRequest(query)
+	search.Fields = []string{"Date", "Close"} // Specify fields you want to retrieve.
+
+	// Execute the search query.
+	searchResults, err := index.Search(search)
+	if err != nil {
+		return nil, err
+	}
+
+	// Process results to fit your expected output.
+	var results []map[string]string
+	for _, hit := range searchResults.Hits {
+		result := make(map[string]string)
+		for field, value := range hit.Fields {
+			result[field] = fmt.Sprintf("%v", value)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
 }
