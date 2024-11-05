@@ -1,28 +1,17 @@
 package search
 
-// import (
-// 	"fmt"
-// 	"testing"
-// )
+// func TestGetCloseInBetweenForSpecificDateRange(t *testing.T) {
+// 	assetClass := "crypto"
+// 	internalSymbol := "1000SATS_USDT"
+// 	startDateString := "2024-07-02T15:59:59Z"
+// 	endDateString := "2024-07-02T19:59:59Z"
 
-// // TestExtractBaseCurrency checks the functionality of extractBaseCurrency
-// func TestExtractBaseCurrency(t *testing.T) {
-// 	tests := []struct {
-// 		filename string
-// 		expected string
-// 	}{
-// 		{"LANCER__XNSE_INR.csv", "INR"},
-// 		{"ZZZ_USDT.csv", "USD"},
-// 		{"LAU__XASX_AUD.csv", "AUD"},
-// 		{"ZENI__1_USDT.csv", "USD"},
-// 		{"LGBBROSLTD__XBOM_INR.csv", "INR"},
+// 	// Run the GetCloseInBetween function
+// 	result, err := GetCloseInBetween(assetClass, internalSymbol, startDateString, endDateString)
+// 	if err != nil {
+// 		t.Fatalf("Error when calling GetCloseInBetween: %v", err)
 // 	}
 
-// 	for _, test := range tests {
-// 		got := extractBaseCurrency(test.filename)
-// 		fmt.Printf("Filename: %s, Extracted Currency: %s\n", test.filename, got)
-// 		if got != test.expected {
-// 			t.Errorf("extractBaseCurrency(%q) = %q; expected %q", test.filename, got, test.expected)
-// 		}
-// 	}
+// 	// Print the result for manual verification
+// 	fmt.Printf("Result: %+v\n", result)
 // }

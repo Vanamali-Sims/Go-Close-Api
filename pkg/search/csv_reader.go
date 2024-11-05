@@ -5,10 +5,21 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"strconv"
 
 	"github.com/blevesearch/bleve"
 )
+
+type Record struct {
+	Date   string
+	Open   float64
+	High   float64
+	Low    float64
+	Close  float64
+	Volume int64
+}
 
 func readCSV(filePath string) ([]map[string]string, error) {
 	file, err := os.Open(filePath)
@@ -48,29 +59,95 @@ func readCSV(filePath string) ([]map[string]string, error) {
 	return data, nil
 }
 
-func queryIndex(index bleve.Index, queryString string) ([]map[string]string, error) {
-	// Construct a query for the Bleve search index. In this case, using a simple query syntax.
-	query := bleve.NewQueryStringQuery(queryString)
+func queryIndex(index bleve.Index, queryStr string) ([]map[string]string, error) {
+	query := bleve.NewQueryStringQuery(queryStr) // Use QueryStringQuery for more flexible queries
+	searchRequest := bleve.NewSearchRequest(query)
 
-	// Create a search request based on the query.
-	search := bleve.NewSearchRequest(query)
-	search.Fields = []string{"Date", "Close"} // Specify fields you want to retrieve.
+	log.Printf("Executing search for query: %s", queryStr)
 
-	// Execute the search query.
-	searchResults, err := index.Search(search)
+	searchResult, err := index.Search(searchRequest)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error executing search: %v", err)
 	}
 
-	// Process results to fit your expected output.
+	log.Printf("Found %d hits for query: %s", searchResult.Total, queryStr)
+
 	var results []map[string]string
-	for _, hit := range searchResults.Hits {
-		result := make(map[string]string)
-		for field, value := range hit.Fields {
-			result[field] = fmt.Sprintf("%v", value)
+	for _, hit := range searchResult.Hits {
+		doc, err := index.Document(hit.ID)
+		if err != nil {
+			continue // Optionally handle error
 		}
-		results = append(results, result)
+
+		data := make(map[string]string)
+		for _, field := range doc.Fields {
+			fieldName := field.Name()
+			fieldValue := string(field.Value())
+			data[fieldName] = fieldValue
+		}
+		results = append(results, data)
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no results found for the query: %s", queryStr)
 	}
 
 	return results, nil
+}
+
+func indexCSV(filePath string, index bleve.Index) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(bufio.NewReader(file))
+	headers, err := reader.Read() // Assuming the first row is headers
+	if err != nil {
+		return err
+	}
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err // Handle non-EOF errors
+		}
+
+		data := make(map[string]string)
+		for i, value := range record {
+			if i < len(headers) {
+				data[headers[i]] = value
+			}
+		}
+
+		// Create a Record struct to be indexed
+		rec := Record{
+			Date:   data["Date"],
+			Open:   parseFloat(data["Open"]),
+			High:   parseFloat(data["High"]),
+			Low:    parseFloat(data["Low"]),
+			Close:  parseFloat(data["Close"]),
+			Volume: parseInt(data["Volume"]),
+		}
+
+		// Indexing the record using Bleve
+		if err := index.Index(data["Date"], rec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseFloat(s string) float64 {
+	f, _ := strconv.ParseFloat(s, 64)
+	return f
+}
+
+func parseInt(s string) int64 {
+	i, _ := strconv.ParseInt(s, 10, 64)
+	return i
 }

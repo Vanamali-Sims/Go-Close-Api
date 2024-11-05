@@ -15,31 +15,82 @@ import (
 
 var index bleve.Index
 
-func InitializeIndex() {
-	indexPath := filepath.Join("C:", "Users", "isvan", "OneDrive", "Documents", "work", "GoApi", "index", "search.bleve")
+func InitializeSearchIndex() {
+	log.Println("Starting index initalisation")
+	basePath := "C:\\Users\\isvan\\OneDrive\\Documents\\work\\GoApi\\data"
+	indexPath := filepath.Join(basePath, "index", "search.bleve")
 
 	var err error
-	if _, err = os.Stat(indexPath); os.IsNotExist(err) {
-		// Create a new index if it doesn't exist
-		mapping := bleve.NewIndexMapping()
-		index, err = bleve.New(indexPath, mapping)
-		if err != nil {
-			log.Fatalf("Failed to create index: %v", err)
-		}
-	} else {
-		// Open an existing index
-		index, err = bleve.Open(indexPath)
-		if err != nil {
-			log.Fatalf("Failed to open index: %v", err)
-		}
+	index, err = initializeIndex(indexPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize search index: %v", err)
 	}
-	log.Println("Index initialized successfully")
+	log.Println("Index initialized successfully.")
+
+	// Optionally index all CSVs if the index was newly created or if you want to ensure it's up to date
+	if err := indexAllCSVs(basePath); err != nil {
+		log.Fatalf("Failed to index CSV files: %v", err)
+	}
+
+	log.Println("Search index initialized and ready.")
 }
 
 func init() {
-	// Initialize the index when the package is imported
-	InitializeIndex()
+	InitializeSearchIndex()
 }
+
+func initializeIndex(indexPath string) (bleve.Index, error) {
+	var idx bleve.Index
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		mapping := bleve.NewIndexMapping()
+		idx, err = bleve.New(indexPath, mapping)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		idx, err = bleve.Open(indexPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return idx, nil
+}
+
+func indexAllCSVs(basePath string) error {
+	indexPath := filepath.Join(basePath, "index", "search.bleve")
+	log.Println(indexPath)
+	index, err := initializeIndex(indexPath)
+	if err != nil {
+		return err
+	}
+	log.Println("About to walk filepath")
+	err = filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && filepath.Ext(path) == ".csv" {
+			log.Printf("Indexing file: %s", path)
+			if err := indexCSV(path, index); err != nil {
+				log.Printf("Failed to index file %s: %v", path, err)
+				return err
+			}
+		}
+		log.Println("Filepath walked successfully.")
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("Error walking the path %s: %v", basePath, err)
+		return err
+	}
+	log.Println("Indexing complete.")
+	return nil
+}
+
+// func init() {
+// 	// Initialize the index when the package is imported
+// 	InitializeIndex()
+// }
 
 type CloseResult struct {
 	ClosePriceUSD      float64 `json:"closePriceUSD"`
@@ -361,6 +412,10 @@ func GetCloseUSDIndex(assetClass, internalSymbol string, date time.Time) (CloseR
 		return CloseResult{}, fmt.Errorf("query index error: %v", err)
 	}
 
+	if len(results) == 0 {
+		return CloseResult{}, fmt.Errorf("no results found for the date: %s", dateQuery)
+	}
+
 	// Assume results[0] is the closest match. This is a simplification and may need better handling.
 	data := results[0]
 	// Parse the close price from the string data retrieved.
@@ -389,7 +444,6 @@ func GetCloseUSDIndex(assetClass, internalSymbol string, date time.Time) (CloseR
 }
 
 // GetCloseInBetweenIndex fetches the closing prices between two dates for an asset using the Bleve index.
-
 func GetCloseInBetweenIndex(assetClass, internalSymbol, startDate, endDate string) (CloseRangeResult, error) {
 	// Parse the start and end date strings into time.Time objects.
 	start, err := time.Parse(time.RFC3339, startDate)
@@ -402,30 +456,30 @@ func GetCloseInBetweenIndex(assetClass, internalSymbol, startDate, endDate strin
 		return CloseRangeResult{}, fmt.Errorf("invalid end date format: %v", err)
 	}
 
-	// Query the index for data matching the start date.
-	startResults, err := queryIndex(index, fmt.Sprintf("Date:>=%s", start.Format(time.RFC3339)))
+	// Query the index for data matching the start date to the end date.
+	queryStr := fmt.Sprintf("+Date:[%s TO %s]", start.Format(time.RFC3339), end.Format(time.RFC3339))
+	results, err := queryIndex(index, queryStr)
 	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("query index error for start date: %v", err)
+		return CloseRangeResult{}, err // Pass the error up
 	}
 
-	// Query the index for data matching the end date.
-	endResults, err := queryIndex(index, fmt.Sprintf("Date:<=%s", end.Format(time.RFC3339)))
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("query index error for end date: %v", err)
-	}
-
-	// Check if results are available before accessing them
-	if len(startResults) == 0 || len(endResults) == 0 {
+	if len(results) == 0 {
 		return CloseRangeResult{}, errors.New("no results found for the provided date range")
 	}
 
-	// Assume startResults[0] and endResults[0] are the closest matches for start and end dates.
-	startData := startResults[0]
-	endData := endResults[0]
+	// Assume startResults[0] and endResults[len(results)-1] are the closest matches for start and end dates.
+	startData := results[0]
+	endData := results[len(results)-1]
 
 	// Parse the start and end close prices.
-	startClosePrice, _ := strconv.ParseFloat(startData["Close"], 64)
-	endClosePrice, _ := strconv.ParseFloat(endData["Close"], 64)
+	startClosePrice, err := strconv.ParseFloat(startData["Close"], 64)
+	if err != nil {
+		return CloseRangeResult{}, fmt.Errorf("error parsing start close price: %v", err)
+	}
+	endClosePrice, err := strconv.ParseFloat(endData["Close"], 64)
+	if err != nil {
+		return CloseRangeResult{}, fmt.Errorf("error parsing end close price: %v", err)
+	}
 
 	// Parse the closest start and end dates.
 	startClosestDate, _ := time.Parse(time.RFC3339, startData["Date"])
