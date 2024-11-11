@@ -73,3 +73,80 @@ package search
 // 		Candle:                  "1d",
 // 	}, nil
 // }
+
+// func InitializeSearchIndex() {
+// 	log.Println("Starting index initalisation")
+// 	basePath := "C:\\Users\\isvan\\OneDrive\\Documents\\work\\GoApi\\data"
+// 	indexPath := filepath.Join(basePath, "index", "search.bleve")
+
+// 	var err error
+// 	index, err = initializeIndex(indexPath)
+// 	if err != nil {
+// 		log.Fatalf("Failed to initialize search index: %v", err)
+// 	}
+// 	log.Println("Index initialized successfully.")
+
+// 	// Optionally index all CSVs if the index was newly created or if you want to ensure it's up to date
+// 	if err := indexAllCSVs(basePath); err != nil {
+// 		log.Fatalf("Failed to index CSV files: %v", err)
+// 	}
+
+// 	log.Println("Search index initialized and ready.")
+// }
+
+// func init() {
+// 	InitializeSearchIndex()
+// }
+
+// func initializeIndex(indexPath string) (bleve.Index, error) {
+// 	var idx bleve.Index
+// 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+// 		mapping := bleve.NewIndexMapping()
+// 		idx, err = bleve.New(indexPath, mapping)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	} else {
+// 		idx, err = bleve.Open(indexPath)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	}
+// 	return idx, nil
+// }
+
+// func indexAllCSVs(basePath string) error {
+// 	indexPath := filepath.Join(basePath, "index", "search.bleve")
+// 	log.Println(indexPath)
+// 	index, err := initializeIndex(indexPath)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	log.Println("About to walk filepath")
+// 	err = filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+// 		if err != nil {
+// 			return err
+// 		}
+// 		if !info.IsDir() && filepath.Ext(path) == ".csv" {
+// 			log.Printf("Indexing file: %s", path)
+// 			if err := indexCSV(path, index); err != nil {
+// 				log.Printf("Failed to index file %s: %v", path, err)
+// 				return err
+// 			}
+// 		}
+// 		log.Println("Filepath walked successfully.")
+// 		return nil
+// 	})
+
+// 	if err != nil {
+// 		log.Printf("Error walking the path %s: %v", basePath, err)
+// 		return err
+// 	}
+// 	log.Println("Indexing complete.")
+// 	return nil
+// }
+
+// func init() {
+// 	// Initialize the index when the package is imported
+// 	InitializeIndex()
+// }

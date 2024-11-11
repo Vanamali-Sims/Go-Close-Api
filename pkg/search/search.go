@@ -3,7 +3,6 @@ package search
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,82 +14,27 @@ import (
 
 var index bleve.Index
 
-func InitializeSearchIndex() {
-	log.Println("Starting index initalisation")
-	basePath := "C:\\Users\\isvan\\OneDrive\\Documents\\work\\GoApi\\data"
-	indexPath := filepath.Join(basePath, "index", "search.bleve")
-
-	var err error
-	index, err = initializeIndex(indexPath)
-	if err != nil {
-		log.Fatalf("Failed to initialize search index: %v", err)
-	}
-	log.Println("Index initialized successfully.")
-
-	// Optionally index all CSVs if the index was newly created or if you want to ensure it's up to date
-	if err := indexAllCSVs(basePath); err != nil {
-		log.Fatalf("Failed to index CSV files: %v", err)
-	}
-
-	log.Println("Search index initialized and ready.")
+type Metadata struct {
+	FetchedDate        string  `json:"fetchedDate"`
+	ConversionRate     float64 `json:"conversionRate"`
+	ConversionRateDate string  `json:"conversionRateDate"`
+	Candle             string  `json:"candle"`
 }
 
-func init() {
-	InitializeSearchIndex()
+type CloseUSDResponse struct {
+	ClosePriceUSD float64  `json:"closePriceUSD"`
+	Metadata      Metadata `json:"metadata"`
 }
 
-func initializeIndex(indexPath string) (bleve.Index, error) {
-	var idx bleve.Index
-	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		mapping := bleve.NewIndexMapping()
-		idx, err = bleve.New(indexPath, mapping)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		idx, err = bleve.Open(indexPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return idx, nil
+type ClosePriceDetail struct {
+	Date          string   `json:"date"`
+	ClosePriceUSD float64  `json:"closePriceUSD"`
+	Metadata      Metadata `json:"metadata"`
 }
 
-func indexAllCSVs(basePath string) error {
-	indexPath := filepath.Join(basePath, "index", "search.bleve")
-	log.Println(indexPath)
-	index, err := initializeIndex(indexPath)
-	if err != nil {
-		return err
-	}
-	log.Println("About to walk filepath")
-	err = filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && filepath.Ext(path) == ".csv" {
-			log.Printf("Indexing file: %s", path)
-			if err := indexCSV(path, index); err != nil {
-				log.Printf("Failed to index file %s: %v", path, err)
-				return err
-			}
-		}
-		log.Println("Filepath walked successfully.")
-		return nil
-	})
-
-	if err != nil {
-		log.Printf("Error walking the path %s: %v", basePath, err)
-		return err
-	}
-	log.Println("Indexing complete.")
-	return nil
+type CloseInBetweenResponse struct {
+	ClosePricesUSD []ClosePriceDetail `json:"closePricesUSD"`
 }
-
-// func init() {
-// 	// Initialize the index when the package is imported
-// 	InitializeIndex()
-// }
 
 type CloseResult struct {
 	ClosePriceUSD      float64 `json:"closePriceUSD"`
@@ -113,7 +57,6 @@ type CloseRangeResult struct {
 	Candle                  string  `json:"candle"`
 }
 
-// Wrapper function to fetch conversion rate, converting float64 timestamp to time.Time if needed
 func getConversionRateForCloseInBetween(baseCurrency string, date time.Time, closePrice float64) (float64, time.Time, error) {
 
 	if baseCurrency == "USD" || baseCurrency == "USDT" {
@@ -131,68 +74,6 @@ func getConversionRateForCloseInBetween(baseCurrency string, date time.Time, clo
 	return conversionRate, conversionRateDate, nil
 }
 
-// GetCloseInBetween fetches the closing prices between two dates for an asset.
-func GetCloseInBetween(assetClass, internalSymbol, startDate, endDate string) (CloseRangeResult, error) {
-	start, err := time.Parse(time.RFC3339, startDate)
-	if err != nil {
-		return CloseRangeResult{}, errors.New("invalid start date format")
-	}
-
-	end, err := time.Parse(time.RFC3339, endDate)
-	if err != nil {
-		return CloseRangeResult{}, errors.New("invalid end date format")
-	}
-
-	csvFilePath, err := findDataPath(assetClass, internalSymbol, start)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("failed to find CSV file path: %v", err)
-	}
-
-	assetData, err := readCSV(csvFilePath)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("failed to read asset CSV: %v", err)
-	}
-
-	startClosePrice, startClosestDate, err := findClosestDate(assetData, start)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("error finding closest start date: %v", err)
-	}
-
-	endClosePrice, endClosestDate, err := findClosestDate(assetData, end)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("error finding closest end date: %v", err)
-	}
-
-	baseCurrency := extractBaseCurrency(internalSymbol)
-
-	// Retrieve conversion rates using the wrapper function
-	startConversionRate, startConversionRateDate, err := getConversionRateForCloseInBetween(baseCurrency, start, startClosePrice)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("failed to retrieve start conversion rate: %v", err)
-	}
-
-	endConversionRate, endConversionRateDate, err := getConversionRateForCloseInBetween(baseCurrency, end, endClosePrice)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("failed to retrieve end conversion rate: %v", err)
-	}
-
-	startClosePriceUSD := startClosePrice * startConversionRate
-	endClosePriceUSD := endClosePrice * endConversionRate
-
-	return CloseRangeResult{
-		StartClosePriceUSD:      startClosePriceUSD,
-		EndClosePriceUSD:        endClosePriceUSD,
-		StartFetchedDate:        startClosestDate.Format(time.RFC3339),
-		EndFetchedDate:          endClosestDate.Format(time.RFC3339),
-		StartConversionRate:     startConversionRate,
-		StartConversionRateDate: startConversionRateDate.Format(time.RFC3339),
-		EndConversionRate:       endConversionRate,
-		EndConversionRateDate:   endConversionRateDate.Format(time.RFC3339),
-		Candle:                  "1d",
-	}, nil
-}
-
-// findClosestDate finds the row in the CSV with the closest date to the requested date.
 func findClosestDate(data []map[string]string, requestedDate time.Time) (float64, time.Time, error) {
 	var closestDate time.Time
 	var closePrice float64
@@ -259,6 +140,66 @@ func GetCloseUSD(assetClass, internalSymbol string, date time.Time) (CloseResult
 	}, nil
 }
 
+func GetCloseInBetween(assetClass, internalSymbol, startDate, endDate string) (CloseRangeResult, error) {
+	start, err := time.Parse(time.RFC3339, startDate)
+	if err != nil {
+		return CloseRangeResult{}, errors.New("invalid start date format")
+	}
+
+	end, err := time.Parse(time.RFC3339, endDate)
+	if err != nil {
+		return CloseRangeResult{}, errors.New("invalid end date format")
+	}
+
+	csvFilePath, err := findDataPath(assetClass, internalSymbol, start)
+	if err != nil {
+		return CloseRangeResult{}, fmt.Errorf("failed to find CSV file path: %v", err)
+	}
+
+	assetData, err := readCSV(csvFilePath)
+	if err != nil {
+		return CloseRangeResult{}, fmt.Errorf("failed to read asset CSV: %v", err)
+	}
+
+	startClosePrice, startClosestDate, err := findClosestDate(assetData, start)
+	if err != nil {
+		return CloseRangeResult{}, fmt.Errorf("error finding closest start date: %v", err)
+	}
+
+	endClosePrice, endClosestDate, err := findClosestDate(assetData, end)
+	if err != nil {
+		return CloseRangeResult{}, fmt.Errorf("error finding closest end date: %v", err)
+	}
+
+	baseCurrency := extractBaseCurrency(internalSymbol)
+
+	// Retrieve conversion rates using the wrapper function
+	startConversionRate, startConversionRateDate, err := getConversionRateForCloseInBetween(baseCurrency, start, startClosePrice)
+	if err != nil {
+		return CloseRangeResult{}, fmt.Errorf("failed to retrieve start conversion rate: %v", err)
+	}
+
+	endConversionRate, endConversionRateDate, err := getConversionRateForCloseInBetween(baseCurrency, end, endClosePrice)
+	if err != nil {
+		return CloseRangeResult{}, fmt.Errorf("failed to retrieve end conversion rate: %v", err)
+	}
+
+	startClosePriceUSD := startClosePrice * startConversionRate
+	endClosePriceUSD := endClosePrice * endConversionRate
+
+	return CloseRangeResult{
+		StartClosePriceUSD:      startClosePriceUSD,
+		EndClosePriceUSD:        endClosePriceUSD,
+		StartFetchedDate:        startClosestDate.Format(time.RFC3339),
+		EndFetchedDate:          endClosestDate.Format(time.RFC3339),
+		StartConversionRate:     startConversionRate,
+		StartConversionRateDate: startConversionRateDate.Format(time.RFC3339),
+		EndConversionRate:       endConversionRate,
+		EndConversionRateDate:   endConversionRateDate.Format(time.RFC3339),
+		Candle:                  "1d",
+	}, nil
+}
+
 func extractBaseCurrency(filename string) string {
 	// Remove the extension first
 	withoutExtension := strings.TrimSuffix(filename, ".csv")
@@ -275,7 +216,6 @@ func extractBaseCurrency(filename string) string {
 	return "USD" // Default to USD if parsing fails or no underscore is found
 }
 
-// Adjust getConversionRate to accept the necessary parameters and pass them correctly
 func getConversionRate(baseCurrency string, date time.Time, rawClosePrice float64) (float64, float64, time.Time, error) {
 	if baseCurrency == "USD" || baseCurrency == "USDT" {
 		return rawClosePrice, 1.0, date, nil // Directly return for USD as no conversion is needed
@@ -401,7 +341,6 @@ func findForexPath(baseCurrency string, date time.Time) (string, error) {
 	return "", fmt.Errorf("no valid forex data path found for the date: %s", date)
 }
 
-// GetCloseUSDIndex fetches the closing USD price for a given asset on a specific date using the Bleve index.
 func GetCloseUSDIndex(assetClass, internalSymbol string, date time.Time) (CloseResult, error) {
 	// Format the date to a string as expected by the query function (ISO8601/RFC3339 format).
 	dateQuery := date.Format(time.RFC3339)
@@ -443,7 +382,6 @@ func GetCloseUSDIndex(assetClass, internalSymbol string, date time.Time) (CloseR
 	}, nil
 }
 
-// GetCloseInBetweenIndex fetches the closing prices between two dates for an asset using the Bleve index.
 func GetCloseInBetweenIndex(assetClass, internalSymbol, startDate, endDate string) (CloseRangeResult, error) {
 	// Parse the start and end date strings into time.Time objects.
 	start, err := time.Parse(time.RFC3339, startDate)
