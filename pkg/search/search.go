@@ -1,8 +1,10 @@
 package search
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -57,6 +59,164 @@ type CloseRangeResult struct {
 	Candle                  string  `json:"candle"`
 }
 
+func GetCloseUSDJSON(assetClass, internalSymbol string, date time.Time) (string, error) {
+	result, err := GetCloseUSD(assetClass, internalSymbol, date)
+	if err != nil {
+		return "", fmt.Errorf("failed to get close USD data: %v", err)
+	}
+
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal results to JSON: %v", err)
+	}
+
+	return string(jsonData), nil
+}
+
+func GetCloseInBetweenJSON(assetClass, internalSymbol, startDate, endDate string) (string, error) {
+	results, err := GetCloseInBetween(assetClass, internalSymbol, startDate, endDate)
+	if err != nil {
+		return "", fmt.Errorf("failed to get close price data in between: %v", err)
+	}
+
+	jsonData, err := json.Marshal(results)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal results to JSON: %v", err)
+	}
+
+	return string(jsonData), nil
+}
+
+func GetCloseUSD(assetClass, internalSymbol string, date time.Time) (CloseUSDResponse, error) {
+	csvFilePath, err := findDataPath(assetClass, internalSymbol, date)
+	if err != nil {
+		return CloseUSDResponse{}, fmt.Errorf("failed to find CSV file path: %v", err)
+	}
+
+	assetData, err := readCSV(csvFilePath)
+	if err != nil {
+		return CloseUSDResponse{}, fmt.Errorf("failed to read asset CSV: %v", err)
+	}
+
+	rawClosePrice, closestDate, err := findClosestDate(assetData, date)
+	if err != nil {
+		return CloseUSDResponse{}, fmt.Errorf("error finding closest date: %v", err)
+	}
+
+	baseCurrency := extractBaseCurrency(internalSymbol)
+	closePriceUSD, conversionRate, conversionRateDate, err := getConversionRate(baseCurrency, date, rawClosePrice)
+	if err != nil {
+		return CloseUSDResponse{}, fmt.Errorf("conversion rate error: %v", err)
+	}
+
+	metadata := Metadata{
+		FetchedDate:        closestDate.Format(time.RFC3339),
+		ConversionRate:     conversionRate,
+		ConversionRateDate: conversionRateDate.Format(time.RFC3339),
+		Candle:             "1d", // Adjust as necessary
+	}
+
+	return CloseUSDResponse{
+		ClosePriceUSD: closePriceUSD,
+		Metadata:      metadata,
+	}, nil
+}
+
+func GetCloseInBetween(assetClass, internalSymbol, startDate, endDate string) (CloseInBetweenResponse, error) {
+	start, err := time.Parse(time.RFC3339, startDate)
+	if err != nil {
+		return CloseInBetweenResponse{}, fmt.Errorf("invalid start date format: %v", err)
+	}
+
+	end, err := time.Parse(time.RFC3339, endDate)
+	if err != nil {
+		return CloseInBetweenResponse{}, fmt.Errorf("invalid end date format: %v", err)
+	}
+
+	csvFilePath, err := findDataPath(assetClass, internalSymbol, start)
+	if err != nil {
+		return CloseInBetweenResponse{}, fmt.Errorf("failed to find CSV file path: %v", err)
+	}
+
+	assetData, err := readCSV(csvFilePath)
+	if err != nil {
+		return CloseInBetweenResponse{}, fmt.Errorf("failed to read asset CSV: %v", err)
+	}
+
+	startClosePrice, startClosestDate, err := findClosestDate(assetData, start)
+	if err != nil {
+		return CloseInBetweenResponse{}, fmt.Errorf("error finding closest start date: %v", err)
+	}
+
+	endClosePrice, endClosestDate, err := findClosestDate(assetData, end)
+	if err != nil {
+		return CloseInBetweenResponse{}, fmt.Errorf("error finding closest end date: %v", err)
+	}
+
+	baseCurrency := extractBaseCurrency(internalSymbol)
+
+	startConversionRate, startConversionRateDate, err := getConversionRateForCloseInBetween(baseCurrency, startClosestDate, startClosePrice)
+	if err != nil {
+		return CloseInBetweenResponse{}, fmt.Errorf("failed to retrieve start conversion rate: %v", err)
+	}
+
+	endConversionRate, endConversionRateDate, err := getConversionRateForCloseInBetween(baseCurrency, endClosestDate, endClosePrice)
+	if err != nil {
+		return CloseInBetweenResponse{}, fmt.Errorf("failed to retrieve end conversion rate: %v", err)
+	}
+
+	startDetail := ClosePriceDetail{
+		Date:          startClosestDate.Format(time.RFC3339),
+		ClosePriceUSD: startClosePrice * startConversionRate,
+		Metadata: Metadata{
+			FetchedDate:        startClosestDate.Format(time.RFC3339),
+			ConversionRate:     startConversionRate,
+			ConversionRateDate: startConversionRateDate.Format(time.RFC3339),
+			Candle:             "1d", // Adjust as necessary
+		},
+	}
+
+	endDetail := ClosePriceDetail{
+		Date:          endClosestDate.Format(time.RFC3339),
+		ClosePriceUSD: endClosePrice * endConversionRate,
+		Metadata: Metadata{
+			FetchedDate:        endClosestDate.Format(time.RFC3339),
+			ConversionRate:     endConversionRate,
+			ConversionRateDate: endConversionRateDate.Format(time.RFC3339),
+			Candle:             "1d", // Adjust as necessary
+		},
+	}
+
+	return CloseInBetweenResponse{
+		ClosePricesUSD: []ClosePriceDetail{startDetail, endDetail},
+	}, nil
+}
+
+func jsonResponse(data interface{}) string {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("Error Marshalling data: %v", err)
+		return "{}"
+	}
+	return string(jsonData)
+}
+
+func extractBaseCurrency(filename string) string {
+	// Remove the extension first
+	withoutExtension := strings.TrimSuffix(filename, ".csv")
+
+	// Split on the last underscore to hopefully get the currency as the last part
+	parts := strings.Split(withoutExtension, "_")
+	if len(parts) > 1 {
+		baseCurrency := parts[len(parts)-1] // Get the last part after the last underscore
+		if baseCurrency == "USDT" {
+			baseCurrency = "USD" // Normalize USDT to USD
+		}
+		return baseCurrency
+	}
+	return "USD" // Default to USD if parsing fails or no underscore is found
+}
+
 func getConversionRateForCloseInBetween(baseCurrency string, date time.Time, closePrice float64) (float64, time.Time, error) {
 
 	if baseCurrency == "USD" || baseCurrency == "USDT" {
@@ -98,122 +258,6 @@ func findClosestDate(data []map[string]string, requestedDate time.Time) (float64
 	}
 
 	return closePrice, closestDate, nil
-}
-
-func GetCloseUSD(assetClass, internalSymbol string, date time.Time) (CloseResult, error) {
-	// Path finding using the adjusted findDataPath function
-	csvFilePath, err := findDataPath(assetClass, internalSymbol, date)
-	if err != nil {
-		return CloseResult{}, fmt.Errorf("failed to find CSV file path: %v", err)
-	}
-	fmt.Println("CSV data path:", csvFilePath) // Debugging output to verify path correctness
-
-	// Reading the CSV file using the found path
-	assetData, err := readCSV(csvFilePath)
-	if err != nil {
-		return CloseResult{}, fmt.Errorf("failed to read asset CSV: %v", err)
-	}
-
-	// Finding the closest matching date and retrieving the raw close price
-	rawClosePrice, closestDate, err := findClosestDate(assetData, date)
-	if err != nil {
-		return CloseResult{}, fmt.Errorf("error finding closest date: %v", err)
-	}
-
-	// Fetching the conversion rate using the dynamically constructed forex file path
-	baseCurrency := extractBaseCurrency(internalSymbol)
-	fmt.Println("Base currency extracted:", baseCurrency) // Debug output for base currency
-
-	closePriceUSD, conversionRate, conversionRateDate, err := getConversionRate(baseCurrency, date, rawClosePrice)
-	if err != nil {
-		return CloseResult{}, fmt.Errorf("conversion rate error: %v", err)
-	}
-
-	// Returning the result struct with all relevant data
-	return CloseResult{
-		ClosePriceUSD:      closePriceUSD,
-		RawClosePrice:      rawClosePrice,
-		FetchedDate:        closestDate.Format(time.RFC3339),
-		ConversionRate:     conversionRate,
-		ConversionRateDate: conversionRateDate.Format(time.RFC3339),
-		Candle:             "1d",
-	}, nil
-}
-
-func GetCloseInBetween(assetClass, internalSymbol, startDate, endDate string) (CloseRangeResult, error) {
-	start, err := time.Parse(time.RFC3339, startDate)
-	if err != nil {
-		return CloseRangeResult{}, errors.New("invalid start date format")
-	}
-
-	end, err := time.Parse(time.RFC3339, endDate)
-	if err != nil {
-		return CloseRangeResult{}, errors.New("invalid end date format")
-	}
-
-	csvFilePath, err := findDataPath(assetClass, internalSymbol, start)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("failed to find CSV file path: %v", err)
-	}
-
-	assetData, err := readCSV(csvFilePath)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("failed to read asset CSV: %v", err)
-	}
-
-	startClosePrice, startClosestDate, err := findClosestDate(assetData, start)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("error finding closest start date: %v", err)
-	}
-
-	endClosePrice, endClosestDate, err := findClosestDate(assetData, end)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("error finding closest end date: %v", err)
-	}
-
-	baseCurrency := extractBaseCurrency(internalSymbol)
-
-	// Retrieve conversion rates using the wrapper function
-	startConversionRate, startConversionRateDate, err := getConversionRateForCloseInBetween(baseCurrency, start, startClosePrice)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("failed to retrieve start conversion rate: %v", err)
-	}
-
-	endConversionRate, endConversionRateDate, err := getConversionRateForCloseInBetween(baseCurrency, end, endClosePrice)
-	if err != nil {
-		return CloseRangeResult{}, fmt.Errorf("failed to retrieve end conversion rate: %v", err)
-	}
-
-	startClosePriceUSD := startClosePrice * startConversionRate
-	endClosePriceUSD := endClosePrice * endConversionRate
-
-	return CloseRangeResult{
-		StartClosePriceUSD:      startClosePriceUSD,
-		EndClosePriceUSD:        endClosePriceUSD,
-		StartFetchedDate:        startClosestDate.Format(time.RFC3339),
-		EndFetchedDate:          endClosestDate.Format(time.RFC3339),
-		StartConversionRate:     startConversionRate,
-		StartConversionRateDate: startConversionRateDate.Format(time.RFC3339),
-		EndConversionRate:       endConversionRate,
-		EndConversionRateDate:   endConversionRateDate.Format(time.RFC3339),
-		Candle:                  "1d",
-	}, nil
-}
-
-func extractBaseCurrency(filename string) string {
-	// Remove the extension first
-	withoutExtension := strings.TrimSuffix(filename, ".csv")
-
-	// Split on the last underscore to hopefully get the currency as the last part
-	parts := strings.Split(withoutExtension, "_")
-	if len(parts) > 1 {
-		baseCurrency := parts[len(parts)-1] // Get the last part after the last underscore
-		if baseCurrency == "USDT" {
-			baseCurrency = "USD" // Normalize USDT to USD
-		}
-		return baseCurrency
-	}
-	return "USD" // Default to USD if parsing fails or no underscore is found
 }
 
 func getConversionRate(baseCurrency string, date time.Time, rawClosePrice float64) (float64, float64, time.Time, error) {
